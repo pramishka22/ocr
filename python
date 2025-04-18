@@ -1,0 +1,78 @@
+import cv2
+import pytesseract
+import re
+import csv
+from datetime import datetime
+
+# Setup CSV
+csv_filename = "fabric_lengths.csv"
+with open(csv_filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(["Timestamp", "Length (m)"])
+
+# Start webcam
+cap = cv2.VideoCapture(0)
+
+last_logged = None  # Track last logged value to avoid duplicates
+
+def preprocess(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    return thresh
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Get frame dimensions
+    height, width, _ = frame.shape
+
+    # Define size of central box (adjust as needed)
+    box_width = 300
+    box_height = 100
+
+    # Calculate coordinates for a centered box
+    x1 = width // 2 - box_width // 2
+    y1 = height // 2 - box_height // 2
+    x2 = x1 + box_width
+    y2 = y1 + box_height
+
+    # Crop display area from center of frame
+    display_area = frame[y1:y2, x1:x2]
+
+    # Preprocess cropped area for OCR
+    processed = preprocess(display_area)
+
+    # OCR config
+    custom_config = r'--oem 3 --psm 7'
+    text = pytesseract.image_to_string(processed, config=custom_config)
+
+    # Extract number using regex and clean it
+    match = re.search(r'\d+[.,]?\d*', text)
+    cleaned_text = match.group(0).replace(',', '.') if match else ""
+
+    # Draw overlays
+    cv2.putText(frame, f"Length: {cleaned_text}", (50, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+    cv2.imshow("LM50A Reader", frame)
+    cv2.imshow("Processed", processed)
+
+    # Save to CSV if new and valid
+    if cleaned_text and cleaned_text != last_logged:
+        last_logged = cleaned_text
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(csv_filename, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([timestamp, cleaned_text])
+        print(f"Logged: {cleaned_text} at {timestamp}")
+
+    # Quit on 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
